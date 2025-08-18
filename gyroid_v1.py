@@ -3,14 +3,14 @@ from skimage import measure
 from stl import mesh
 
 # Parameters
-cell_size_mm = 8.0  # TPMS unit cell length (mm)
+cell_size_mm = 5.0  # TPMS unit cell length (mm)
 num_cells = 4   # Number of cells along each axis
-wall_thickness = 1.6    # mm
+wall_thickness = 1.4    # mm
 isovalue = 0.0  # Gyroid threshold surface
 scale = 1.0 # Overall scaling factor
 
 # Resolution: higher = smoother mesh but heavier file
-points_per_cell = 30
+points_per_cell = 50
 
 # Create grid
 L = cell_size_mm * num_cells
