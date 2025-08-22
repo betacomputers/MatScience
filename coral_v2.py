@@ -6,13 +6,13 @@ import matplotlib.pyplot as plt
 # Parameters
 container_size = 20.0  # mm - size of rectangular container (20)
 resolution = 80  # points per dimension (80)
-max_iterations = 6  # fractal iteration depth (5) - more iterations = more branches
-branch_probability = 0.9  # probability of branching (0.8) - higher = more branches
+max_iterations = 5  # fractal iteration depth (5) - more iterations = more branches
+branch_probability = 0.8  # probability of branching (0.8) - higher = more branches
 branch_angle = np.pi/6  # angle between branches (30 degrees) - smaller angle = denser packing
 branch_length_factor = 0.7  # how much shorter each branch is (0.6) - longer branches = more overlap
 branch_thickness_factor = 0.8  # how much thinner each branch is (0.7) - thicker branches = more volume
-base_thickness = 1.0  # mm - thickness of main branches (1.2) - thinner = more branches fit
-num_initial_branches = 12  # number of main branches from center (8) - more main branches
+base_thickness = 0.8  # mm - thickness of main branches (1.2) - thinner = more branches fit
+num_initial_branches = 12  # number of main branches from center (12) - more main branches for better distribution
 
 # Create 3D grid
 x = np.linspace(-container_size/2, container_size/2, resolution)
@@ -59,7 +59,7 @@ def create_branch(start_point, direction, length, thickness, iteration):
         return
     
     # Add some natural curve to the branch direction
-    curve_magnitude = 0.15
+    curve_magnitude = 0.12  # Reduced from 0.15 for more even distribution
     curve_direction = np.array([np.random.uniform(-1, 1) for _ in range(3)])
     curve_direction = curve_direction / np.linalg.norm(curve_direction)
     
@@ -69,6 +69,9 @@ def create_branch(start_point, direction, length, thickness, iteration):
     
     current_pos = start_point
     current_direction = direction
+    
+    # Track branch positions for better sub-branch distribution
+    branch_positions = []
     
     for i in range(num_segments):
         # Calculate next position with curve
@@ -81,6 +84,9 @@ def create_branch(start_point, direction, length, thickness, iteration):
         # Create cylinder segment
         create_cylinder_segment(current_pos, next_pos, thickness)
         
+        # Store position for sub-branching
+        branch_positions.append(current_pos.copy())
+        
         # Update for next segment - check for zero length
         direction_vector = next_pos - current_pos
         direction_length = np.linalg.norm(direction_vector)
@@ -90,14 +96,36 @@ def create_branch(start_point, direction, length, thickness, iteration):
         
         current_pos = next_pos
     
+    # Add final position
+    branch_positions.append(current_pos.copy())
+    
     # Decide whether to create sub-branches
     if iteration < max_iterations - 1 and np.random.random() < branch_probability:
-        # Create 2-4 sub-branches (more sub-branches for density)
+        # Create 2-4 sub-branches with better distribution along the branch
         num_sub_branches = np.random.randint(2, 5)
         
+        # Choose positions along the branch for sub-branches (avoid start and end)
+        if len(branch_positions) > 2:
+            # Use positions from middle sections for better distribution
+            start_idx = max(1, len(branch_positions) // 4)
+            end_idx = min(len(branch_positions) - 1, 3 * len(branch_positions) // 4)
+            
+            # Select evenly spaced positions for sub-branches
+            if end_idx > start_idx:
+                sub_branch_indices = np.linspace(start_idx, end_idx, num_sub_branches, dtype=int)
+            else:
+                sub_branch_indices = [len(branch_positions) // 2] * num_sub_branches
+        else:
+            sub_branch_indices = [len(branch_positions) // 2] * num_sub_branches
+        
         for i in range(num_sub_branches):
-            # Calculate new direction with some randomness
-            angle = branch_angle * (1 + np.random.uniform(-0.3, 0.3))
+            if i < len(sub_branch_indices):
+                branch_start = branch_positions[sub_branch_indices[i]]
+            else:
+                branch_start = current_pos
+            
+            # Calculate new direction with improved distribution
+            angle = branch_angle * (1 + np.random.uniform(-0.2, 0.2))  # Reduced randomness
             
             # Create rotation matrix around a random axis perpendicular to current direction
             perp_axis = np.array([np.random.uniform(-1, 1) for _ in range(3)])
@@ -116,39 +144,84 @@ def create_branch(start_point, direction, length, thickness, iteration):
                                perp_axis * np.dot(perp_axis, current_direction) * (1 - cos_angle))
                 new_direction = new_direction / np.linalg.norm(new_direction)
                 
-                # Create sub-branch
-                new_length = length * branch_length_factor * (0.6 + 0.8 * np.random.random())
+                # Create sub-branch with better length distribution
+                new_length = length * branch_length_factor * (0.7 + 0.6 * np.random.random())
                 new_thickness = thickness * branch_thickness_factor
-                new_start = current_pos  # Start from current position
                 
-                create_branch(new_start, new_direction, new_length, new_thickness, iteration + 1)
+                create_branch(branch_start, new_direction, new_length, new_thickness, iteration + 1)
 
 def generate_coral():
-    """Generate a coral structure with multiple main branches"""
+    """Generate a coral structure with multiple main branches using Fibonacci sphere distribution"""
     center = np.array([0, 0, 0])
+    
+    # Use Fibonacci sphere distribution for more even spacing
+    def fibonacci_sphere(samples=num_initial_branches):
+        """Generate evenly distributed points on a sphere using Fibonacci spiral"""
+        points = []
+        phi = np.pi * (3 - np.sqrt(5))  # golden angle in radians
+        
+        for i in range(samples):
+            y = 1 - (i / float(samples - 1)) * 2  # y goes from 1 to -1
+            radius = np.sqrt(1 - y * y)  # radius at y
+            
+            theta = phi * i  # golden angle increment
+            
+            x = np.cos(theta) * radius
+            z = np.sin(theta) * radius
+            
+            points.append([x, y, z])
+        
+        return np.array(points)
+    
+    # Generate evenly distributed directions
+    directions = fibonacci_sphere(num_initial_branches)
     
     # Create multiple main branches growing outward from center
     for i in range(num_initial_branches):
-        # Create direction in spherical coordinates for even distribution
-        phi = np.pi * (1 - np.sqrt(5)) / 2  # golden angle
-        theta = 2 * np.pi * i / num_initial_branches
+        # Get the pre-calculated direction
+        direction = directions[i]
         
-        # Convert to Cartesian coordinates
-        x_dir = np.sin(phi) * np.cos(theta)
-        y_dir = np.sin(phi) * np.sin(theta)
-        z_dir = np.cos(phi)
-        
-        # Add some randomness to make it more natural
-        direction = np.array([x_dir, y_dir, z_dir])
-        direction += np.random.uniform(-0.3, 0.3, 3)
+        # Add some randomness to make it more natural (but keep it small for even distribution)
+        direction += np.random.uniform(-0.2, 0.2, 3)
         direction = direction / np.linalg.norm(direction)
         
         # Randomize branch length and thickness slightly
-        branch_length = container_size * 0.4 * (0.7 + 0.6 * np.random.random())
+        branch_length = container_size * 0.45 * (0.7 + 0.6 * np.random.random())
         branch_thickness = base_thickness * (0.8 + 0.4 * np.random.random())
         
         print(f"Creating main branch {i+1}/{num_initial_branches}")
         create_branch(center, direction, branch_length, branch_thickness, 0)
+    
+    # Add additional branches from different starting points for better distribution
+    num_additional_start_points = 8
+    print(f"Creating {num_additional_start_points} additional starting points for better distribution...")
+    
+    for i in range(num_additional_start_points):
+        # Create starting points distributed throughout the cube
+        start_radius = container_size * 0.3 * (0.3 + 0.7 * np.random.random())
+        start_phi = np.random.uniform(0, 2 * np.pi)
+        start_theta = np.arccos(2 * np.random.random() - 1)
+        
+        start_x = start_radius * np.sin(start_theta) * np.cos(start_phi)
+        start_y = start_radius * np.sin(start_theta) * np.sin(start_phi)
+        start_z = start_radius * np.cos(start_theta)
+        
+        start_point = np.array([start_x, start_y, start_z])
+        
+        # Create 2-3 branches from each additional starting point
+        num_branches_from_point = np.random.randint(2, 4)
+        
+        for j in range(num_branches_from_point):
+            # Random direction from this point
+            direction = np.array([np.random.uniform(-1, 1) for _ in range(3)])
+            direction = direction / np.linalg.norm(direction)
+            
+            # Shorter branches from secondary points
+            branch_length = container_size * 0.25 * (0.6 + 0.8 * np.random.random())
+            branch_thickness = base_thickness * 0.7 * (0.7 + 0.6 * np.random.random())
+            
+            print(f"Creating additional branch {j+1}/{num_branches_from_point} from point {i+1}")
+            create_branch(start_point, direction, branch_length, branch_thickness, 1)  # Start at iteration 1
 
 # Generate the coral structure
 print("Generating coral structure...")
