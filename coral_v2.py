@@ -190,36 +190,36 @@ for i, f in enumerate(faces):
         coral_mesh.vectors[i][j] = verts[f[j], :]
 
 # Save STL file
-coral_mesh.save('coral_v2.stl')
-print(f"Saved coral_v2.stl with {len(faces)} faces")
+coral_mesh.save('_coral_v2.stl')
+print(f"Saved _coral_v2.stl with {len(faces)} faces")
 
 # Optional: Create a simple visualization
 print("Creating visualization...")
 fig = plt.figure(figsize=(12, 8))
 
 # Show middle slice
-"""mid_z = resolution // 2
+mid_z = resolution // 2
 ax1 = fig.add_subplot(221)
 ax1.imshow(final_volume[:, :, mid_z], cmap='viridis')
 ax1.set_title(f'Middle Z-slice (z={mid_z})')
 ax1.set_xlabel('X')
-ax1.set_ylabel('Y')"""
+ax1.set_ylabel('Y')
 
 # Show middle Y-slice
-"""mid_y = resolution // 2
+mid_y = resolution // 2
 ax2 = fig.add_subplot(222)
 ax2.imshow(final_volume[:, mid_y, :], cmap='viridis')
 ax2.set_title(f'Middle Y-slice (y={mid_y})')
 ax2.set_xlabel('X')
-ax2.set_ylabel('Z')"""
+ax2.set_ylabel('Z')
 
 # Show middle X-slice
-"""mid_x = resolution // 2
+mid_x = resolution // 2
 ax3 = fig.add_subplot(223)
 ax3.imshow(final_volume[mid_x, :, :], cmap='viridis')
 ax3.set_title(f'Middle X-slice (x={mid_x})')
 ax3.set_xlabel('Y')
-ax3.set_ylabel('Z')"""
+ax3.set_ylabel('Z')
 
 # Show 3D scatter plot of coral points
 ax4 = fig.add_subplot(224, projection='3d')
@@ -236,6 +236,6 @@ ax4.set_zlabel('Z')
 ax4.set_title('3D Coral Structure')
 
 plt.tight_layout()
-plt.savefig('coral_v2_visualization.png', dpi=150, bbox_inches='tight')
-print("Saved coral_v2_visualization.png")
+plt.savefig('_coral_v2_visualization.png', dpi=150, bbox_inches='tight')
+print("Saved _coral_v2_visualization.png")
 plt.show()

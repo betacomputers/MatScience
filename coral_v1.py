@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 container_size = 20.0  # mm - size of rectangular container (20)
 resolution = 80  # points per dimension (80)
 max_iterations = 5  # fractal iteration depth (4)
-branch_probability = 0.8  # probability of branching (0.7)
+branch_probability = 1.0  # probability of branching (0.7)
 branch_angle = np.pi/4  # angle between branches (45 degrees)
 branch_length_factor = 0.6  # how much shorter each branch is (0.6)
 branch_thickness_factor = 0.7  # how much thinner each branch is (0.7)
