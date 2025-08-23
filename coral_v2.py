@@ -7,12 +7,12 @@ import matplotlib.pyplot as plt
 container_size = 20.0  # mm - size of rectangular container (20)
 resolution = 80  # points per dimension (80)
 max_iterations = 5  # fractal iteration depth (5) - more iterations = more branches
-branch_probability = 0.8  # probability of branching (0.8) - higher = more branches
-branch_angle = np.pi/6  # angle between branches (30 degrees) - smaller angle = denser packing
-branch_length_factor = 0.7  # how much shorter each branch is (0.6) - longer branches = more overlap
-branch_thickness_factor = 0.8  # how much thinner each branch is (0.7) - thicker branches = more volume
-base_thickness = 0.8  # mm - thickness of main branches (1.2) - thinner = more branches fit
-num_initial_branches = 12  # number of main branches from center (12) - more main branches for better distribution
+branch_probability = 0.9  # probability of branching (0.9) - higher = more branches
+branch_angle = np.pi/8  # angle between branches (22.5 degrees) - smaller angle = denser packing
+branch_length_factor = 0.7  # how much shorter each branch is (0.7) - longer branches = more overlap
+branch_thickness_factor = 0.8  # how much thinner each branch is (0.8) - thicker branches = more volume
+base_thickness = 0.8  # mm - thickness of main branches (0.8) - thinner = more branches fit
+num_initial_branches = 20  # number of main branches from center (20) - more main branches for better distribution
 
 # Create 3D grid
 x = np.linspace(-container_size/2, container_size/2, resolution)
@@ -193,7 +193,7 @@ def generate_coral():
         create_branch(center, direction, branch_length, branch_thickness, 0)
     
     # Add additional branches from different starting points for better distribution
-    num_additional_start_points = 8
+    num_additional_start_points = 16
     print(f"Creating {num_additional_start_points} additional starting points for better distribution...")
     
     for i in range(num_additional_start_points):
@@ -224,15 +224,29 @@ def generate_coral():
             create_branch(start_point, direction, branch_length, branch_thickness, 1)  # Start at iteration 1
 
 # Generate the coral structure
+
 print("Generating coral structure...")
 generate_coral()
 
+# Add a solid shell (face) around the perimeter of the cube
+shell_thickness = max(container_size / resolution, 0.5)  # At least one voxel thick
+outer_shell_mask = (
+    (np.abs(X) >= (container_size/2 - shell_thickness)) |
+    (np.abs(Y) >= (container_size/2 - shell_thickness)) |
+    (np.abs(Z) >= (container_size/2 - shell_thickness))
+)
+
+# Merge the shell with the coral structure
+coral_with_shell = coral_volume | outer_shell_mask
+
 # Apply container bounds (rectangular container)
+
 container_mask = (X >= -container_size/2) & (X <= container_size/2) & \
                  (Y >= -container_size/2) & (Y <= container_size/2) & \
                  (Z >= -container_size/2) & (Z <= container_size/2)
 
-final_volume = coral_volume & container_mask
+# Use the coral structure with the shell
+final_volume = coral_with_shell & container_mask
 
 # Remove small disconnected components: keep only the largest connected component
 labels = measure.label(final_volume.astype(np.uint8), connectivity=1)
