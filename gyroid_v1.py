@@ -44,5 +44,5 @@ for i, f in enumerate(faces):
     for j in range(3):
         gyroid_mesh.vectors[i][j] = verts[f[j], :]
 
-gyroid_mesh.save('gyroid_shell.stl')
-print("Saved gyroid_shell.stl")
+gyroid_mesh.save('_gyroid.stl')
+print("Saved _gyroid.stl")
