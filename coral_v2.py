@@ -12,7 +12,7 @@ branch_angle = np.pi/8  # angle between branches (22.5 degrees) - smaller angle 
 branch_length_factor = 0.7  # how much shorter each branch is (0.7) - longer branches = more overlap
 branch_thickness_factor = 0.8  # how much thinner each branch is (0.8) - thicker branches = more volume
 base_thickness = 0.8  # mm - thickness of main branches (0.8) - thinner = more branches fit
-num_initial_branches = 20  # number of main branches from center (20) - more main branches for better distribution
+num_initial_branches = 5  # number of main branches from center (20) - more main branches for better distribution
 
 # Create 3D grid
 x = np.linspace(-container_size/2, container_size/2, resolution)
@@ -193,7 +193,7 @@ def generate_coral():
         create_branch(center, direction, branch_length, branch_thickness, 0)
     
     # Add additional branches from different starting points for better distribution
-    num_additional_start_points = 16
+    num_additional_start_points = 8
     print(f"Creating {num_additional_start_points} additional starting points for better distribution...")
     
     for i in range(num_additional_start_points):
@@ -275,6 +275,9 @@ coral_mesh = mesh.Mesh(np.zeros(faces.shape[0], dtype=mesh.Mesh.dtype))
 for i, f in enumerate(faces):
     for j in range(3):
         coral_mesh.vectors[i][j] = verts[f[j], :]
+
+# Verify solid voxels
+print(f"Total solid voxels: {np.sum(final_volume)}")
 
 # Save STL file
 coral_mesh.save('_coral_v2.stl')
