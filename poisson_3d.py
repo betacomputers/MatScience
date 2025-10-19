@@ -133,7 +133,7 @@ def visualize(mesh, gfu):
 
 def main():
     # Absolute path to your STL on Desktop/ngsolve
-    stl_path = Path("/Users/julian/Documents/MatScience/_coral_v2.stl")
+    stl_path = Path("/Users/julian/Documents/MatScience/gyroid_20250928_125037.stl")
 
     # Generate a coarse mesh for quick testing. Lower maxh for finer mesh.
     mesh = load_mesh_from_stl(stl_path, maxh=0.5)
