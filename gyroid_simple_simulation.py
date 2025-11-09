@@ -4,11 +4,12 @@ from pathlib import Path
 from datetime import datetime
 from skimage import measure
 from stl import mesh
+import sys
 
 class SimpleGyroidAnalysis:
     """Simple mechanical analysis of gyroid structures"""
     
-    def __init__(self, size=20.0, resolution=60, unit_cell_size=4.0, wall_thickness=0.3):
+    def __init__(self, size=20.0, resolution=60, unit_cell_size=4.0, wall_thickness=0.3, smoothness=0.5):
         """
         Initialize gyroid analysis
         
@@ -22,6 +23,7 @@ class SimpleGyroidAnalysis:
         self.resolution = resolution
         self.unit_cell_size = unit_cell_size
         self.wall_thickness = wall_thickness
+        self.smoothness = smoothness
         
         # Create 3D grid
         self.x = np.linspace(-size/2, size/2, resolution)
@@ -33,25 +35,46 @@ class SimpleGyroidAnalysis:
         self.gyroid_volume = None
         
     def generate_gyroid(self):
-        """Generate gyroid structure using mathematical formula"""
-        print("Generating gyroid structure...")
+        """Generate smooth gyroid structure using mathematical formula with smoothing"""
+        print("Generating smooth gyroid structure...")
         
         # Scale coordinates to unit cell size
         scale = 2 * np.pi / self.unit_cell_size
         x_scaled = self.X * scale
         y_scaled = self.Y * scale
         z_scaled = self.Z * scale
-        
-        # Gyroid level set function
+
+        # Gyroid level set function (classic formula)
         gyroid_function = (np.sin(x_scaled) * np.cos(y_scaled) + 
                           np.sin(y_scaled) * np.cos(z_scaled) + 
                           np.sin(z_scaled) * np.cos(x_scaled))
         
-        # Create volume by thresholding
-        threshold = 2 * self.wall_thickness - 1
-        self.gyroid_volume = gyroid_function > threshold
+        # Gaussian smoothing 
+        from scipy import ndimage
         
-        print(f"Gyroid generated with {np.sum(self.gyroid_volume)} solid voxels")
+        # Apply 3D Gaussian filter
+        sigma = self.smoothness  # Smoothing parameter - adjust for desired smoothness
+        gyroid_smooth = ndimage.gaussian_filter(gyroid_function, sigma=sigma)
+        
+        # Create volume by thresholding the smoothed function
+        # Use a more refined threshold for smoother transitions
+        threshold = 2 * self.wall_thickness - 1
+        self.gyroid_volume = gyroid_smooth > threshold
+        
+        # Optional: Apply morphological operations for cleaner structure
+        # Remove small isolated regions and smooth boundaries
+        from scipy.ndimage import binary_opening, binary_closing
+        
+        # Small opening to remove noise
+        kernel_size = 1
+        self.gyroid_volume = binary_opening(self.gyroid_volume, 
+                                          structure=np.ones((kernel_size, kernel_size, kernel_size)))
+        
+        # Small closing to fill small gaps
+        self.gyroid_volume = binary_closing(self.gyroid_volume, 
+                                          structure=np.ones((kernel_size, kernel_size, kernel_size)))
+        
+        print(f"Smooth gyroid generated with {np.sum(self.gyroid_volume)} solid voxels")
         print(f"Volume fraction: {np.sum(self.gyroid_volume) / self.gyroid_volume.size:.3f}")
         return self.gyroid_volume
     
@@ -317,49 +340,196 @@ class SimpleGyroidAnalysis:
         print(f"  Displacement: {loading_results['displacement']*1000:.3f} mm")
         print(f"  Safety factor: {loading_results['safety_factor']:.2f}")
         print(f"  Failure: {'YES' if loading_results['failure'] else 'NO'}")
+    
+    def load_external_stl(self, stl_path, resolution=80, physical_size=None):
+        """
+        Load and voxelize an external STL file for analysis
+        
+        Parameters:
+        - stl_path: Path to STL file
+        - resolution: Voxel resolution for analysis
+        - physical_size: Physical size in mm (if None, will be estimated from STL)
+        """
+        print(f"Loading external STL file: {stl_path}")
+        
+        # Load STL mesh
+        stl_mesh = mesh.Mesh.from_file(str(stl_path))
+        
+        # Get bounding box
+        min_coords = np.min(stl_mesh.vectors.reshape(-1, 3), axis=0)
+        max_coords = np.max(stl_mesh.vectors.reshape(-1, 3), axis=0)
+        bbox_size = max_coords - min_coords
+        
+        # Set physical size if not provided
+        if physical_size is None:
+            physical_size = max(bbox_size)  # Use largest dimension
+        
+        self.size = physical_size
+        self.resolution = resolution
+        self.voxel_size = physical_size / resolution
+        
+        print(f"STL bounding box: {bbox_size}")
+        print(f"Physical size: {physical_size:.2f} mm")
+        print(f"Voxel size: {self.voxel_size:.3f} mm")
+        
+        # Create voxel grid
+        x = np.linspace(min_coords[0], max_coords[0], resolution)
+        y = np.linspace(min_coords[1], max_coords[1], resolution)
+        z = np.linspace(min_coords[2], max_coords[2], resolution)
+        X, Y, Z = np.meshgrid(x, y, z, indexing='ij')
+        
+        # Store coordinate arrays for visualization
+        self.x = x
+        self.y = y
+        self.z = z
+        
+        # Voxelize the mesh
+        print("Voxelizing mesh...")
+        self.gyroid_volume = self._voxelize_mesh(stl_mesh, X, Y, Z)
+        
+        print(f"Voxelization complete: {np.sum(self.gyroid_volume)} solid voxels")
+        print(f"Volume fraction: {np.sum(self.gyroid_volume) / self.gyroid_volume.size:.3f}")
+        
+        return self.gyroid_volume
+    
+    def _voxelize_mesh(self, stl_mesh, X, Y, Z):
+        """Voxelize STL mesh using ray casting"""
+        volume = np.zeros(X.shape, dtype=bool)
+        
+        # Get all grid points
+        points = np.stack([X.flatten(), Y.flatten(), Z.flatten()], axis=1)
+        
+        # For each point, count ray intersections
+        for i, point in enumerate(points):
+            if i % 10000 == 0:
+                print(f"Processing point {i}/{len(points)}")
+            
+            # Cast ray in +X direction
+            ray_intersections = 0
+            
+            for triangle in stl_mesh.vectors:
+                if self._ray_triangle_intersection(point, [1, 0, 0], triangle):
+                    ray_intersections += 1
+            
+            # Odd number of intersections = inside
+            if ray_intersections % 2 == 1:
+                idx = np.unravel_index(i, X.shape)
+                volume[idx] = True
+        
+        return volume
+    
+    def _ray_triangle_intersection(self, ray_origin, ray_direction, triangle):
+        """Check if ray intersects triangle"""
+        # Möller-Trumbore algorithm
+        v0, v1, v2 = triangle
+        
+        edge1 = v1 - v0
+        edge2 = v2 - v0
+        h = np.cross(ray_direction, edge2)
+        a = np.dot(edge1, h)
+        
+        if abs(a) < 1e-8:
+            return False
+        
+        f = 1.0 / a
+        s = ray_origin - v0
+        u = f * np.dot(s, h)
+        
+        if u < 0.0 or u > 1.0:
+            return False
+        
+        q = np.cross(s, edge1)
+        v = f * np.dot(ray_direction, q)
+        
+        if v < 0.0 or u + v > 1.0:
+            return False
+        
+        t = f * np.dot(edge2, q)
+        return t > 1e-8
 
 def main():
-    """Main function to run the complete analysis"""
-    print("=== Simple Gyroid Mechanical Analysis ===")
+    """Main function to run analysis - either generate gyroid or analyze external STL"""
+    print("=== Materials Science Mechanical Analysis ===")
     
-    # Parameters
-    size = 20.0  # mm
-    resolution = 60  # Lower resolution for faster computation
-    unit_cell_size = 4.0  # mm
-    wall_thickness = 0.4  # 0-1, where 1 is solid
+    # Check for command line arguments
+    if len(sys.argv) > 1:
+        # External STL file provided
+        stl_path = sys.argv[1]
+        if not Path(stl_path).exists():
+            print(f"Error: STL file not found: {stl_path}")
+            return
+        
+        print(f"Analyzing external STL file: {stl_path}")
+        print("="*60)
+        
+        # Initialize analysis for external STL
+        analysis = SimpleGyroidAnalysis()
+        
+        # Load external STL file
+        volume_data = analysis.load_external_stl(stl_path, resolution=80)
+        
+        # Simulate compressive loading
+        loading_results = analysis.simulate_compressive_loading(applied_stress=1e6)  # 1 MPa
+        
+        # Analyze stress distribution
+        stress_field = analysis.analyze_stress_distribution()
+        
+        # Visualize results
+        analysis.visualize_results(stress_field)
+        
+        # Report results
+        analysis.report_analysis(loading_results)
+        
+        print(f"\nExternal STL analysis completed successfully!")
+        print(f"Analyzed file: {stl_path}")
+        
+    else:
+        # Generate gyroid (default behavior)
+        print("No external STL file provided. Generating gyroid structure...")
+        print("Usage: python gyroid_simple_simulation.py [path_to_stl_file]")
+        print("="*60)
+        
+        size = 20.0  # mm - size of the gyroid cube
+        resolution = 100  # Higher resolution for smoother surface (60-120 recommended)
+        unit_cell_size = 3.0  # mm - smaller unit cells for finer detail
+        density_threshold = 0.7  # 0-1, where 0 is solid (0.2-0.7 recommended)
+        smoothness = 0.8  # Higher smoothness
+        
+        print(f"Gyroid Parameters:")
+        print(f"  Size: {size} mm")
+        print(f"  Resolution: {resolution}x{resolution}x{resolution}")
+        print(f"  Unit cell size: {unit_cell_size} mm")
+        print(f"  Wall thickness: {density_threshold} ({density_threshold*100:.0f}% volume fraction)")
+        print(f"  Smoothness: {smoothness} (smoothing)")
+        
+        # Initialize analysis
+        analysis = SimpleGyroidAnalysis(size=size, resolution=resolution, 
+                                       unit_cell_size=unit_cell_size, wall_thickness=density_threshold,
+                                       smoothness=smoothness)
+        
+        # Generate gyroid
+        gyroid_volume = analysis.generate_gyroid()
+        
+        # Create mesh and save STL file
+        verts, faces, normals, values = analysis.create_mesh()
+        stl_path = analysis.save_stl(verts, faces)
+        
+        # Simulate compressive loading
+        loading_results = analysis.simulate_compressive_loading(applied_stress=2e7)  # 2 MPa
+        
+        # Analyze stress distribution
+        stress_field = analysis.analyze_stress_distribution()
+        
+        # Visualize results
+        analysis.visualize_results(stress_field)
+        
+        # Report results
+        analysis.report_analysis(loading_results)
+        
+        print(f"\nGyroid analysis completed successfully!")
+        print(f"STL file saved: {stl_path}")
+        print("The gyroid structure is ready for 3D printing!")
     
-    print(f"Parameters:")
-    print(f"  Size: {size} mm")
-    print(f"  Resolution: {resolution}x{resolution}x{resolution}")
-    print(f"  Unit cell size: {unit_cell_size} mm")
-    print(f"  Wall thickness: {wall_thickness} ({wall_thickness*100:.0f}% volume fraction)")
-    
-    # Initialize analysis
-    analysis = SimpleGyroidAnalysis(size=size, resolution=resolution, 
-                                   unit_cell_size=unit_cell_size, wall_thickness=wall_thickness)
-    
-    # Generate gyroid
-    gyroid_volume = analysis.generate_gyroid()
-    
-    # Create mesh and save STL file
-    verts, faces, normals, values = analysis.create_mesh()
-    stl_path = analysis.save_stl(verts, faces)
-    
-    # Simulate compressive loading
-    loading_results = analysis.simulate_compressive_loading(applied_stress=2e6)  # 2 MPa
-    
-    # Analyze stress distribution
-    stress_field = analysis.analyze_stress_distribution()
-    
-    # Visualize results
-    analysis.visualize_results(stress_field)
-    
-    # Report results
-    analysis.report_analysis(loading_results)
-    
-    print(f"\nAnalysis completed successfully!")
-    print(f"STL file saved: {stl_path}")
-    print("The gyroid structure is ready for 3D printing!")
     print("This approach avoids the mesh connectivity issues of NGSolve")
     print("while still providing useful mechanical property estimates.")
 
