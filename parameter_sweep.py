@@ -1,11 +1,3 @@
-"""
-Parameter sweep script for TPMS structures.
-
-This script automatically iterates through different TPMS shell types and thickness
-values, generates STL files, runs compression simulations, and collects all results
-into a CSV dataset.
-"""
-
 import os
 import sys
 import csv
@@ -66,18 +58,6 @@ TEMP_DIR.mkdir(exist_ok=True)
 
 
 def generate_tpms_structure(tpms_design: str, thickness: float, cell_size: float, output_stl_path: Path) -> Tuple[bool, Path]:
-    """
-    Generate a TPMS structure and export to STL.
-    
-    Args:
-        tpms_design: TPMS design type (e.g., 'Shell-TPMS Gyroid')
-        thickness: Thickness parameter (0-1)
-        cell_size: Cell size in mm (same for all dimensions)
-        output_stl_path: Path where STL file will be saved (with or without .stl extension)
-        
-    Returns:
-        Tuple of (success: bool, actual_stl_path: Path)
-    """
     try:
         print(f"\n{'='*60}")
         print(f"Generating: {tpms_design}, thickness={thickness}, cell_size={cell_size}mm")
@@ -113,29 +93,20 @@ def generate_tpms_structure(tpms_design: str, thickness: float, cell_size: float
         # Verify file was created (fn_export_stl_file adds .stl extension)
         actual_stl_path = output_stl_path.parent / f"{file_name}.stl"
         if actual_stl_path.exists():
-            print(f"✓ STL file created: {actual_stl_path}")
+            print(f"STL file created: {actual_stl_path}")
             return True, actual_stl_path
         else:
-            print(f"✗ Failed to create STL file: {actual_stl_path}")
+            print(f"Failed to create STL file: {actual_stl_path}")
             return False, output_stl_path
             
     except Exception as e:
-        print(f"✗ Error generating structure: {e}")
+        print(f"Error generating structure: {e}")
         import traceback
         traceback.print_exc()
         return False, output_stl_path
 
 
 def run_simulation(stl_path: Path) -> Dict:
-    """
-    Run compression simulation on an STL file.
-    
-    Args:
-        stl_path: Path to STL file
-        
-    Returns:
-        Dictionary with simulation results, or None if failed
-    """
     try:
         print(f"Running simulation on: {stl_path.name}")
         
@@ -166,15 +137,6 @@ def run_simulation(stl_path: Path) -> Dict:
 
 
 def extract_results_summary(results: Dict) -> Dict:
-    """
-    Extract key results from simulation output.
-    
-    Args:
-        results: Full simulation results dictionary
-        
-    Returns:
-        Dictionary with summary metrics
-    """
     return {
         'compressive_strength_MPa': results['compressive_strength'] / 1e6,
         'max_force_N': results['max_force_N'],
@@ -186,7 +148,6 @@ def extract_results_summary(results: Dict) -> Dict:
 
 
 def main():
-    """Main parameter sweep function."""
     print("\n" + "="*60)
     print("TPMS PARAMETER SWEEP")
     print("="*60)
@@ -218,7 +179,7 @@ def main():
                 # Generate TPMS structure
                 success, actual_stl_path = generate_tpms_structure(tpms_design, thickness, cell_size, stl_path)
                 if not success:
-                    print(f"⚠ Skipping simulation due to generation failure")
+                    print(f"Skipping simulation due to generation failure")
                     # Still record in CSV with error flag
                     csv_rows.append({
                         'tpms_design': tpms_design,
@@ -314,7 +275,7 @@ def main():
                 print(f"  Compressive strength range: {min(strengths):.2f} - {max(strengths):.2f} MPa")
                 print(f"  Average compressive strength: {np.mean(strengths):.2f} MPa")
     else:
-        print("⚠ No results to write!")
+        print("No results to write!")
     
     print(f"\n{'='*60}")
     print("PARAMETER SWEEP COMPLETE")
