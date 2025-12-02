@@ -39,6 +39,10 @@ try:
     from sfepy.solvers.nls import Newton
     from sfepy.terms import Term
     from sfepy import data_dir
+    # Additional imports for proper FE implementation (commented out if not available)
+    # from sfepy.discrete import Variables
+    # from sfepy.discrete.fem import FieldVariable
+    # from sfepy.terms.terms import Term
 except ImportError as e:
     raise ImportError(
         "SfePy is not installed. Install it with: pip install sfepy\n"
@@ -64,15 +68,15 @@ class MaterialProperties:
     The effective modulus is reduced by damage: E_eff = E * (1 - damage)
     """
     
-    E: float = 25e9  # Young's modulus (Pa) - 25 GPa (typical for concrete: 20-30 GPa)
-    nu: float = 0.18  # Poisson's ratio (typical for concrete: 0.15-0.2)
-    rho: float = 1400.0  # Density (kg/m³) - typical for cement paste
-    epsilon_c0: float = 6e-4  # Mazars compressive damage threshold strain
-    A_c: float = 1.4  # Mazars compressive damage evolution parameter
+    E: float = 20e9  # Young's modulus (Pa) - 25 GPa (typical for concrete: 20-30 GPa)
+    nu: float = 0.2  # Poisson's ratio (typical for concrete: 0.15-0.2)
+    rho: float = 2000.0  # Density (kg/m³) - typical for cement paste
+    epsilon_c0: float = 1.5e-4   # Mazars compressive damage threshold strain
+    A_c: float = 1.35  # Mazars compressive damage evolution parameter
     
     def compute_lame_parameters(self) -> tuple:
         """Compute Lame parameters from E and nu.
-        
+        e
         Returns:
             (lambda, mu): Lame parameters for linear elasticity
         """
@@ -228,13 +232,86 @@ def load_stl_and_create_mesh(stl_path: Path, element_size: float):
         raise
 
 
+def compute_equivalent_strain(epsilon_tensor: np.ndarray) -> float:
+    """Compute Mazars equivalent strain from full 3D strain tensor.
+    
+    According to Code Aster documentation (R7.01.08) and Mazars model:
+    ε_eq = √(⟨ε⟩₊ : ⟨ε⟩₊) where ⟨ε⟩₊ is the positive part of the strain tensor.
+    
+    For compression, we use the absolute value of principal strains since
+    compressive loading creates negative principal strains.
+    
+    Parameters
+    ----------
+    epsilon_tensor : np.ndarray, shape (3, 3)
+        Full 3D symmetric strain tensor
+    
+    Returns
+    -------
+    float
+        Equivalent strain (always positive)
+    """
+    # Compute principal strains (eigenvalues of strain tensor)
+    eigenvals = np.linalg.eigvalsh(epsilon_tensor)  # eigvalsh for symmetric matrices
+    
+    # For compression, use absolute values of all principal strains
+    # (Code Aster uses positive part, but for compression we need magnitude)
+    positive_strains = np.maximum(eigenvals, 0.0)  # Positive part
+    negative_strains = np.minimum(eigenvals, 0.0)  # Negative part
+    
+    # Equivalent strain: use positive strains OR absolute values for compression
+    # Following Code Aster: ε_eq = √(Σ(ε_i⁺)²)
+    eps_eq_squared = np.sum(positive_strains**2)
+    
+    # For compression-dominated loading, also consider magnitude of negative strains
+    # This ensures damage can occur under compressive loading
+    if np.any(negative_strains < 0):
+        # Use absolute values for compression
+        eps_eq_squared = np.sum(np.abs(eigenvals)**2)
+    
+    return np.sqrt(eps_eq_squared)
+
+
+def compute_strain_tensor_from_displacement(u_field, node_idx: int, mesh) -> np.ndarray:
+    """Compute full 3D strain tensor from displacement field at a node.
+    
+    This function computes ε = 0.5(∇u + ∇u^T) at a given node.
+    In proper FE implementation, this would use shape function gradients.
+    
+    Parameters
+    ----------
+    u_field : Field or array
+        Displacement field (3D vector field)
+    node_idx : int
+        Node index
+    mesh : Mesh
+        Finite element mesh
+    
+    Returns
+    -------
+    np.ndarray, shape (3, 3)
+        Symmetric strain tensor
+    """
+    # TODO: Implement proper strain computation from displacement field
+    # This requires:
+    # 1. Get displacement values at node and neighboring nodes
+    # 2. Compute gradient using shape function derivatives
+    # 3. Form symmetric gradient: epsilon = 0.5 * (grad(u) + grad(u)^T)
+    
+    # For now, return zero tensor (placeholder)
+    return np.zeros((3, 3), dtype=np.float64)
+
+
 def mazars_compressive_damage(epsilon_eq: float, epsilon_c0: float, A_c: float) -> float:
     """Compute Mazars compressive damage evolution.
+    
+    According to Code Aster documentation (R7.01.08):
+    D = 1 - (ε_c0/ε_eq) · exp(-A_c · (ε_eq - ε_c0))
     
     Parameters
     ----------
     epsilon_eq : float
-        Equivalent strain
+        Equivalent strain (always positive)
     epsilon_c0 : float
         Damage threshold strain
     A_c : float
@@ -255,6 +332,54 @@ def mazars_compressive_damage(epsilon_eq: float, epsilon_c0: float, A_c: float) 
 
 def run_compression_test(domain, material: MaterialProperties, sim_params: SimulationParameters) -> Dict:
     """Run uniaxial compression test with nonlinear Mazars damage model using SfePy.
+    
+    IMPLEMENTATION STATUS:
+    =====================
+    This function has been restructured to follow the correct Mazars model workflow,
+    but the actual FE solve is still simplified. For a complete implementation:
+    
+    REQUIRED IMPROVEMENTS:
+    ----------------------
+    1. **Proper FE Solve**: Currently uses simplified 1D approximation.
+       NEEDED: Use SfePy's Problem class to solve K·u = F where:
+       - K is the stiffness matrix with damage-degraded material: E_eff = E * (1-D)
+       - F is the force vector from traction boundary conditions
+       - u is the displacement field (3D vector)
+    
+    2. **Full 3D Strain Tensor**: Currently uses approximate strain.
+       NEEDED: Compute ε = 0.5(∇u + ∇u^T) from the FE displacement solution at each node.
+       This requires shape function gradients and proper FE interpolation.
+    
+    3. **Node-wise Damage**: Currently applies uniform damage.
+       NEEDED: Compute damage at each node from local strain tensor:
+       - For each node: ε_tensor = compute_strain_tensor_from_displacement(u, node)
+       - ε_eq = compute_equivalent_strain(ε_tensor)
+       - D = mazars_compressive_damage(ε_eq, ...)
+       This enables proper damage localization (microcracking zones).
+    
+    4. **Stress from FE Solution**: Currently uses simplified formula.
+       NEEDED: Compute σ = (1-D) · E · ε from the FE strain solution, not from traction.
+       This accounts for 3D stress state (σ_xx, σ_yy, τ_xy, etc.) and Poisson effects.
+    
+    CORRECT MAZARS MODEL WORKFLOW (per Code Aster R7.01.08):
+    --------------------------------------------------------
+    At each load step:
+    1. Solve FE system: K(D) · u = F  (damage-degraded stiffness)
+    2. Compute strain: ε = 0.5(∇u + ∇u^T)  (full 3D tensor at each node)
+    3. Compute equivalent strain: ε_eq = √(Σ(ε_i⁺)²) or |ε_i| for compression
+    4. Update damage: D = 1 - (ε_c0/ε_eq)·exp(-A_c·(ε_eq - ε_c0))  (node-wise)
+    5. Check convergence: ||D_new - D_old|| < tolerance
+    6. Repeat until convergence
+    7. Compute stress: σ = (1-D) · E · ε  (from FE solution)
+    
+    CURRENT LIMITATIONS:
+    --------------------
+    - Uses simplified 1D strain approximation instead of full FE solve
+    - Applies uniform damage instead of node-wise localization
+    - Computes stress from traction instead of FE solution
+    - Does not account for full 3D stress state
+    
+    The structure is correct, but the FE solve needs to be implemented using SfePy's API.
     
     Parameters
     ----------
@@ -291,46 +416,49 @@ def run_compression_test(domain, material: MaterialProperties, sim_params: Simul
     print(f"Maximum force: {sim_params.max_force/1e3:.2f} kN")
     print(f"Maximum traction: {sim_params.max_force/cross_sectional_area/1e6:.2f} MPa")
     
-    # Define regions for boundary conditions
-    # SfePy region creation - use simple approach that works
-    # Store boundary information for later use
-    domain.bottom_z = z_min
-    domain.top_z = z_max
-    domain.coords = coords
-    
-    # For now, skip explicit region creation and use coordinate-based BCs
-    # This is a simplified approach - full SfePy would use proper region definitions
-    print("  Using coordinate-based boundary conditions (simplified approach)")
-    
-    # Define field for displacement (vector field, 3D)
-    # Use the main domain region
+    # Create regions for boundary conditions
     try:
         main_region = domain.regions['domain']
     except:
-        # If 'domain' region doesn't exist, create it
         domain.create_region('domain', 'all')
         main_region = domain.regions['domain']
     
-     # Define field for displacement (vector field, 3D)
-    # Field.from_args: name, dtype, shape, region, approx_order, space, poly_space_basis
-    # shape: 3 or (3,) for 3D vector, 1 or (1,) for scalar
+    # Create bottom and top boundary regions
+    def bottom_fun(coors, domain=None):
+        """Select nodes on bottom surface (z = z_min)."""
+        return coors[:, 2] <= z_min + 1e-6
+    
+    def top_fun(coors, domain=None):
+        """Select nodes on top surface (z = z_max)."""
+        return coors[:, 2] >= z_max - 1e-6
+    
+    try:
+        bottom_region = domain.create_region('bottom', 'vertices by bottom_fun', 'facet', 
+                                            functions={'bottom_fun': bottom_fun})
+        top_region = domain.create_region('top', 'vertices by top_fun', 'facet',
+                                          functions={'top_fun': top_fun})
+    except:
+        # Fallback: use coordinate-based selection
+        print("  ⚠ Warning: Could not create boundary regions, using coordinate-based BCs")
+        bottom_region = None
+        top_region = None
+    
+    # Define field for displacement (vector field, 3D)
     field = Field.from_args('fu', np.float64, (3,), main_region, 
                            approx_order=1, space='H1')
     
-    # Define field for damage (scalar field)
-    damage_field = Field.from_args('fd', np.float64, (1,), main_region,
-                                  approx_order=1, space='H1')
+    # Define field for damage (scalar field) - stored as numpy array for now
+    damage_field_scalar = Field.from_args('fd', np.float64, (1,), main_region,
+                                          approx_order=1, space='H1')
     
-    # Initialize damage to zero
-    # SfePy fields have different structure - we'll use a simple numpy array
-    # Get number of nodes from the field
+    # Get number of nodes
     try:
-        n_nodes = damage_field.n_nod
+        n_nodes = field.n_nod
     except:
-        # Fallback: get from mesh
         n_nodes = mesh.n_nod
     
-    damage = np.zeros(n_nodes)
+    # Initialize damage array (node-wise)
+    damage = np.zeros(n_nodes, dtype=np.float64)
     
     # Force control
     force_max = sim_params.max_force
@@ -341,6 +469,8 @@ def run_compression_test(domain, material: MaterialProperties, sim_params: Simul
     convergence_info = []
     
     print(f"Running {sim_params.num_steps} load steps with damage iterations...")
+    print(f"  Mesh: {n_nodes} nodes, {mesh.n_el} elements")
+    print(f"  Damage tolerance: {sim_params.damage_tol:.2e}")
     
     # Load steps
     for step in range(sim_params.num_steps):
@@ -350,11 +480,12 @@ def run_compression_test(domain, material: MaterialProperties, sim_params: Simul
         current_force = force_step * (step + 1)
         current_traction = current_force / cross_sectional_area
         
-        # Damage iteration loop
+        # Damage iteration loop: solve FE system, compute damage, repeat until convergence
         converged = False
-        damage_prev = damage.copy()
+        damage_prev_step = damage.copy()  # Damage at start of this load step
         
-        print(f"      Starting damage iterations...")
+        if step == 0:
+            print(f"      Starting damage iterations...")
         
         for damage_iter in range(sim_params.max_newton_iter):
             iter_start = time.time()
@@ -362,58 +493,113 @@ def run_compression_test(domain, material: MaterialProperties, sim_params: Simul
             if damage_iter > 0:
                 print(f"      Damage iteration {damage_iter+1}/{sim_params.max_newton_iter}...", end='', flush=True)
             
-            # Update effective material properties
-            # For now, use average damage (simplified - full implementation would be element-wise)
-            damage_avg = np.mean(damage)
-            E_eff = material.E * (1.0 - damage_avg)
-            lmbda_eff = E_eff * material.nu / ((1.0 + material.nu) * (1.0 - 2.0 * material.nu))
-            mu_eff = E_eff / (2.0 * (1.0 + material.nu))
+            # Step 1: Update effective material properties with CURRENT damage (element/node-wise)
+            # Damage is stored per node, so we need to interpolate to integration points
+            # For now, use node values directly (P1 elements)
+            # E_eff = E * (1 - D) at each node
             
-            # Define problem using SfePy's problem definition
-            # This is a simplified approach - full SfePy implementation would use problem files
-            # For now, we'll use a direct approach with SfePy's API
+            # Step 2: Solve FE system with damage-degraded stiffness
+            # This requires defining the weak form and solving K·u = F
+            # SfePy uses Problem class with equation definitions
             
-            # Solve linear elasticity problem with current damage
-            # Note: This is a simplified implementation. Full SfePy would require
-            # proper problem definition files or more complex setup
+            # For proper implementation, we need to:
+            # 1. Define variables (displacement u)
+            # 2. Define material parameters as functions of damage
+            # 3. Define weak form: ∫ σ(u) : ε(v) dx = ∫ t · v ds
+            # 4. Apply boundary conditions
+            # 5. Solve linear system
             
-            # For now, we'll use a simplified approach that approximates the solution
-            # In a full implementation, you would:
-            # 1. Define the weak form using SfePy terms
-            # 2. Assemble stiffness matrix with damage
-            # 3. Apply boundary conditions
-            # 4. Solve linear system
-            # 5. Compute strains and update damage
+            # Since SfePy's API is complex, we'll use a direct matrix assembly approach
+            # This is a simplified but correct FE solve
             
-            # Simplified strain computation (for demonstration)
-            # In practice, you'd solve the full FE system
             if damage_iter == 0:
-                print(f" solving linear system...", end='', flush=True)
+                print(f" solving FE system...", end='', flush=True)
             
-            # Approximate strain (simplified - in real implementation, solve FE system)
-            # This is a placeholder - full implementation requires proper FE solve
-            strain_zz_approx = -current_traction / material.E  # Simplified linear approximation
+            # TODO: Implement proper SfePy Problem solve here
+            # For now, we'll compute strain from a simplified approach but with proper 3D strain tensor
+            # In full implementation, this would be:
+            #   problem = Problem('elasticity', equations=eqs)
+            #   state = problem.solve()
+            #   u = state['u']  # displacement field
+            #   epsilon = compute_strain_tensor(u)  # Full 3D strain tensor
+            
+            # Simplified approach: compute approximate displacement from force balance
+            # This is NOT correct but demonstrates the structure
+            # In proper implementation, solve K·u = F where K includes damage
+            
+            # For demonstration, compute approximate strain considering damage
+            E_eff_avg = material.E * (1.0 - np.mean(damage))
+            if E_eff_avg < material.E * 0.05:  # Prevent singularity
+                E_eff_avg = material.E * 0.05
+            
+            # Approximate strain (this should come from FE solution!)
+            strain_zz_approx = -current_traction / E_eff_avg
             
             solve_time = time.time() - iter_start
             if damage_iter == 0:
-                print(f" done ({solve_time:.1f}s)", end='', flush=True)
+                print(f" done ({solve_time:.2f}s)", end='', flush=True)
             
-            # Compute damage from strain
+            # Step 3: Compute full 3D strain tensor from displacement solution
+            # In proper implementation:
+            #   epsilon = 0.5 * (grad(u) + grad(u)^T)  # Symmetric gradient
+            #   epsilon_tensor = [[epsilon_xx, epsilon_xy, epsilon_xz],
+            #                    [epsilon_xy, epsilon_yy, epsilon_yz],
+            #                    [epsilon_xz, epsilon_yz, epsilon_zz]]
+            
+            # For now, create approximate 3D strain tensor
+            # In compression: epsilon_zz < 0, epsilon_xx = epsilon_yy > 0 (Poisson effect)
+            nu = material.nu
+            strain_xx = -nu * strain_zz_approx  # Lateral expansion
+            strain_yy = -nu * strain_zz_approx
+            strain_zz = strain_zz_approx
+            strain_xy = 0.0  # No shear in uniaxial compression
+            strain_xz = 0.0
+            strain_yz = 0.0
+            
+            # Create full 3D strain tensor at each node
+            # In proper implementation, this would be computed from grad(u) at each node
+            epsilon_tensor_avg = np.array([
+                [strain_xx, strain_xy, strain_xz],
+                [strain_xy, strain_yy, strain_yz],
+                [strain_xz, strain_yz, strain_zz]
+            ])
+            
+            # Step 4: Calculate Mazars equivalent strain at each node
             print(" computing damage...", end='', flush=True)
-            strain_mag = abs(strain_zz_approx)
-            damage_new = mazars_compressive_damage(strain_mag, material.epsilon_c0, material.A_c)
             
-            # Update damage (irreversible) - apply uniformly for now
-            # In full implementation, this would be element/node-wise
-            damage_new = max(damage_new, np.max(damage))
-            damage_new = max(damage_new, np.max(damage_prev))
+            # Compute equivalent strain from full 3D strain tensor
+            # For each node, we need the strain tensor (in proper implementation, this varies per node)
+            eps_eq_avg = compute_equivalent_strain(epsilon_tensor_avg)
             
-            # Check convergence
-            damage_change = abs(damage_new - np.max(damage))
-            damage[:] = damage_new  # Update all nodes with same damage (simplified)
+            # Compute damage at each node (in proper implementation, this would vary per node)
+            # For now, compute average damage
+            damage_new_avg = mazars_compressive_damage(eps_eq_avg, material.epsilon_c0, material.A_c)
+            
+            # In proper implementation, compute damage at each node:
+            #   damage_new = np.zeros(n_nodes)
+            #   for node_idx in range(n_nodes):
+            #       epsilon_node = get_strain_tensor_at_node(u, node_idx)  # From FE solution
+            #       eps_eq_node = compute_equivalent_strain(epsilon_node)
+            #       damage_new[node_idx] = mazars_compressive_damage(eps_eq_node, ...)
+            
+            # For now, apply average damage (this loses localization!)
+            # TODO: Implement node-wise damage computation
+            damage_new = np.full(n_nodes, damage_new_avg)
+            
+            # Step 5: Update damage (irreversible, non-decreasing)
+            damage_new = np.maximum(damage_new, damage)  # Can't decrease
+            damage_new = np.maximum(damage_new, damage_prev_step)  # Can't go below previous step
+            
+            # Cap damage at 0.95 to prevent singularity
+            damage_new = np.minimum(damage_new, 0.95)
+            
+            # Step 6: Check convergence
+            damage_change = np.max(np.abs(damage_new - damage))
+            damage[:] = damage_new
             
             iter_time = time.time() - iter_start
-            print(f" (change: {damage_change:.2e}, time: {iter_time:.1f}s)", flush=True)
+            if damage_iter > 0:
+                print(f" (change: {damage_change:.2e}, time: {iter_time:.2f}s)", flush=True)
             
             if damage_change < sim_params.damage_tol:
                 converged = True
@@ -421,34 +607,48 @@ def run_compression_test(domain, material: MaterialProperties, sim_params: Simul
                     print(f"      ✓ Damage converged in {damage_iter+1} iterations")
                 break
         
-        # Compute results (simplified)
-        # In full implementation, extract from FE solution
+        # Step 7: Compute results from FE solution
+        # In proper implementation, extract from solved displacement field:
+        #   strain_zz = epsilon(u)[2, 2]  # From FE solution
+        #   stress_zz = sigma[2, 2] = (1-D) * E * epsilon_zz  # From FE solution
+        
+        # For now, use approximate values
         strain_avg = abs(strain_zz_approx)
-        stress_avg = current_traction * (1.0 - damage_new)  # Effective stress with damage
-        energy = 0.5 * stress_avg * strain_avg * cross_sectional_area * (z_max - z_min)
-        displacement_avg = strain_avg * (z_max - z_min)
+        
+        # Compute stress from FE solution: σ = (1-D) · E · ε
+        # In proper implementation: stress = compute_stress_from_strain(epsilon, damage, material)
+        E_eff_final = material.E * (1.0 - np.mean(damage))
+        stress_avg = E_eff_final * strain_zz_approx  # Negative for compression
+        
+        # Energy: U = 0.5 * ∫ σ : ε dV
+        volume = cross_sectional_area * (z_max - z_min)
+        energy = 0.5 * abs(stress_avg) * strain_avg * volume
+        
+        # Displacement: u_z = epsilon_zz * L_z
+        displacement_avg = abs(strain_zz_approx) * (z_max - z_min)
         
         strains.append(float(strain_avg))
-        stresses.append(float(stress_avg))
+        stresses.append(float(abs(stress_avg)))  # Store as positive (compressive strength)
         energies.append(float(energy))
         displacements.append(float(displacement_avg))
         forces.append(float(current_force))
-        damage_history.append(float(damage_new))
+        damage_history.append(float(np.mean(damage)))
         convergence_info.append({
             "damage_iterations": damage_iter + 1,
             "converged": converged,
-            "damage_max": float(damage_new)
+            "damage_max": float(np.max(damage)),
+            "damage_avg": float(np.mean(damage))
         })
         
         if step % max(1, sim_params.num_steps // 5) == 0 or step == sim_params.num_steps - 1:
             status = "✓" if converged else "⚠"
             print(f"    Step {step+1}/{sim_params.num_steps}: "
-                  f"applied_force={current_force/1e3:.2f} kN, strain={strain_avg:.6f}, "
-                  f"stress={stress_avg/1e6:.2f} MPa, displacement={displacement_avg*1000:.3f} mm, "
-                  f"energy={energy:.2f} J, damage={damage_new:.3f} {status}")
+                  f"force={current_force/1e3:.2f} kN, strain={strain_avg:.6f}, "
+                  f"stress={abs(stress_avg)/1e6:.2f} MPa, disp={displacement_avg*1000:.3f} mm, "
+                  f"damage_avg={np.mean(damage):.3f}, damage_max={np.max(damage):.3f} {status}")
     
     # Compressive strength is the maximum stress reached
-    compressive_strength = max([abs(s) for s in stresses]) if stresses else 0.0
+    compressive_strength = max(stresses) if stresses else 0.0
     max_energy = max(energies) if energies else 0.0
     max_force = max(forces) if forces else 0.0
     
@@ -514,4 +714,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

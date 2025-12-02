@@ -34,14 +34,17 @@ from mazars_model_sfepy import (
 TPMS_TYPES = ['gyroid', 'schwarz', 'diamond', 'lidinoid', 'split-p']
 
 # Unit cell sizes to test (mm) - comprehensive range for full dataset
-UNIT_CELL_SIZES = [2.0, 3.0, 4.0, 5.0, 6.0, 7.0]  # mm
+UNIT_CELL_SIZES = [0.2, 0.3, 0.4, 0.5, 0.6]  # mm
 
 # Wall thickness values to test (mm) - comprehensive range for full dataset
-WALL_THICKNESSES = [0.2, 0.3, 0.4, 0.5, 0.6]  # mm
+WALL_THICKNESSES = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]  # mm
 
 # Porosity ranges to test - comprehensive range for full dataset
-POROSITY_MIN_VALUES = [0.2, 0.3, 0.4]  # Minimum porosity
-POROSITY_MAX_VALUES = [0.5, 0.6, 0.7, 0.8]  # Maximum porosity
+POROSITY_MIN_VALUES = [0.2, 0.3, 0.4, 0.5]  # Minimum porosity
+POROSITY_MAX_VALUES = [0.5, 0.6, 0.7, 0.8, 0.9]  # Maximum porosity
+
+# Function degree values to test
+FUNC_DEGREE_VALUES = [1, 2, 3]  # Linear, quadratic, cubic gradient
 
 # Fixed parameters for all structures - balanced for quality and speed
 NUMX = 1  # Number of unit cells in x (single cell)
@@ -49,18 +52,17 @@ NUMY = 1  # Number of unit cells in y (single cell)
 NUMZ = 1  # Number of unit cells in z (single cell)
 NSTEPS = 20  # Voxel resolution per unit cell (balanced quality/speed)
 GRAD = 1  # Graded porosity (1) or constant (0)
-FUNC_DEGREE = 1  # Linear gradient
 DELTA = 0.2  # Porosity tolerance
 SMOOTHNESS = 0.8  # Gaussian smoothing
 MARCHING_STEP = 2  # Marching cubes resolution (balanced quality/speed)
 
 # Simulation parameters - FULL simulations
 SIM_ELEMENT_SIZE = 0.05  # m (balanced for accuracy)
-SIM_MAX_FORCE = 20000000.0  # N (20 MN - realistic stress levels)
+SIM_MAX_FORCE = 30.0  # N (targets 10-50 MPa stress range for 0.2-0.6 mm unit cells)
 SIM_NUM_STEPS = 10  # Full simulation with 10 steps
 
 # Test limit - set to None to test all combinations
-MAX_COMBINATIONS = 1800  # Test only first 10 combinations
+MAX_COMBINATIONS = None  # Test all combinations for full dataset
 
 # Output settings
 OUTPUT_CSV = 'dataset_full.csv'
@@ -72,11 +74,11 @@ GYROID_OUTPUT_DIR.mkdir(exist_ok=True)
 
 def generate_gyroid_structure(unit_cell_size: float, wall_thickness: float,
                                porosity_min: float, porosity_max: float,
-                               output_stl_path: Path, tpms_type: str = 'gyroid') -> Tuple[bool, Path]:
+                               output_stl_path: Path, tpms_type: str = 'gyroid', func_degree: int = 1) -> Tuple[bool, Path]:
     """Generate TPMS STL file with given parameters using active_gyroid_gen."""
     try:
         print(f"Generating {tpms_type} TPMS: cell_size={unit_cell_size}mm, wall={wall_thickness}mm, "
-              f"porosity=[{porosity_min:.2f}, {porosity_max:.2f}]")
+              f"porosity=[{porosity_min:.2f}, {porosity_max:.2f}], func_degree={func_degree}")
 
         # Create GyroidParameters using the new API
         params = GyroidParameters(
@@ -88,7 +90,7 @@ def generate_gyroid_structure(unit_cell_size: float, wall_thickness: float,
             porosity_min=porosity_min,
             porosity_max=porosity_max,
             grad=GRAD,
-            func_degree=FUNC_DEGREE,
+            func_degree=func_degree,
             delta=DELTA,
             smoothness=SMOOTHNESS,
             marching_step=MARCHING_STEP,
@@ -168,10 +170,11 @@ def main():
     print(f"Wall thicknesses: {WALL_THICKNESSES} mm")
     print(f"Porosity min values: {POROSITY_MIN_VALUES}")
     print(f"Porosity max values: {POROSITY_MAX_VALUES}")
+    print(f"Function degree values: {FUNC_DEGREE_VALUES}")
     print(f"Mesh resolution: {NSTEPS} voxels/unit cell (reduced for speed)")
     print(f"Marching cubes step: {MARCHING_STEP} (lower = faster)")
     print(f"Simulation steps: {SIM_NUM_STEPS} (full simulation)")
-    total_combinations = len(TPMS_TYPES) * len(UNIT_CELL_SIZES) * len(WALL_THICKNESSES) * len(POROSITY_MIN_VALUES) * len(POROSITY_MAX_VALUES)
+    total_combinations = len(TPMS_TYPES) * len(UNIT_CELL_SIZES) * len(WALL_THICKNESSES) * len(POROSITY_MIN_VALUES) * len(POROSITY_MAX_VALUES) * len(FUNC_DEGREE_VALUES)
     print(f"Total possible combinations: {total_combinations}")
     if MAX_COMBINATIONS:
         print(f"Testing limit: {MAX_COMBINATIONS} combinations")
@@ -185,6 +188,7 @@ def main():
         'wall_thickness_mm',
         'porosity_min',
         'porosity_max',
+        'func_degree',
         'stl_path',
         'compressive_strength_MPa',
         'max_force_N',
@@ -213,109 +217,113 @@ def main():
             for wall_thickness in WALL_THICKNESSES:
                 for porosity_min in POROSITY_MIN_VALUES:
                     for porosity_max in POROSITY_MAX_VALUES:
-                        # Skip if min > max
-                        if porosity_min > porosity_max:
-                            continue
+                        for func_degree in FUNC_DEGREE_VALUES:
+                            # Skip if min > max
+                            if porosity_min > porosity_max:
+                                continue
 
-                        # Check if we've reached the limit (before processing)
-                        if MAX_COMBINATIONS and successful_count >= MAX_COMBINATIONS:
-                            print(f"\n{'='*60}")
-                            print(f"Reached test limit of {MAX_COMBINATIONS} successful combinations")
-                            print(f"{'='*60}")
-                            csvfile.close()
-                            return
+                            # Check if we've reached the limit (before processing)
+                            if MAX_COMBINATIONS and successful_count >= MAX_COMBINATIONS:
+                                print(f"\n{'='*60}")
+                                print(f"Reached test limit of {MAX_COMBINATIONS} successful combinations")
+                                print(f"{'='*60}")
+                                csvfile.close()
+                                return
 
-                        current_combination += 1
-                        print(f"\n[{current_combination}/{total_combinations if not MAX_COMBINATIONS else MAX_COMBINATIONS}] Processing combination...")
-                        print(f"  TPMS type: {tpms_type}")
+                            current_combination += 1
+                            print(f"\n[{current_combination}/{total_combinations if not MAX_COMBINATIONS else MAX_COMBINATIONS}] Processing combination...")
+                            print(f"  TPMS type: {tpms_type}, func_degree: {func_degree}")
 
-                        # Create unique filename for this combination
-                        stl_filename_base = f"{tpms_type}_cs{unit_cell_size:.1f}_wt{wall_thickness:.2f}_p{porosity_min:.2f}_{porosity_max:.2f}"
-                        stl_path = GYROID_OUTPUT_DIR / f"{stl_filename_base}.stl"
+                            # Create unique filename for this combination
+                            stl_filename_base = f"{tpms_type}_cs{unit_cell_size:.1f}_wt{wall_thickness:.2f}_p{porosity_min:.2f}_{porosity_max:.2f}_fd{func_degree}"
+                            stl_path = GYROID_OUTPUT_DIR / f"{stl_filename_base}.stl"
 
-                        # Generate TPMS structure using active_gyroid_gen
-                        success, actual_stl_path = generate_gyroid_structure(
-                            unit_cell_size, wall_thickness, porosity_min, porosity_max, stl_path, tpms_type=tpms_type
-                        )
-                    if not success:
-                        print(f"Skipping simulation due to generation failure")
-                        # Still record in CSV with error flag
-                        row = {
-                            'tpms_type': tpms_type,
-                            'unit_cell_size_mm': unit_cell_size,
-                            'wall_thickness_mm': wall_thickness,
-                            'porosity_min': porosity_min,
-                            'porosity_max': porosity_max,
-                            'stl_path': None,
-                            'compressive_strength_MPa': None,
-                            'max_force_N': None,
-                            'cross_sectional_area_m2': None,
-                            'energy_absorption_J': None,
-                            'max_displacement_mm': None,
-                            'max_strain': None,
-                            'status': 'generation_failed',
-                        }
-                        writer.writerow(row)
-                        csvfile.flush()  # Write immediately
-                        print(f"  → Written to CSV: generation_failed")
-                        continue
+                            # Generate TPMS structure using active_gyroid_gen
+                            success, actual_stl_path = generate_gyroid_structure(
+                                unit_cell_size, wall_thickness, porosity_min, porosity_max, stl_path, tpms_type=tpms_type, func_degree=func_degree
+                            )
+                            if not success:
+                                print(f"Skipping simulation due to generation failure")
+                                # Still record in CSV with error flag
+                                row = {
+                                    'tpms_type': tpms_type,
+                                    'unit_cell_size_mm': unit_cell_size,
+                                    'wall_thickness_mm': wall_thickness,
+                                    'porosity_min': porosity_min,
+                                    'porosity_max': porosity_max,
+                                    'func_degree': func_degree,
+                                    'stl_path': None,
+                                    'compressive_strength_MPa': None,
+                                    'max_force_N': None,
+                                    'cross_sectional_area_m2': None,
+                                    'energy_absorption_J': None,
+                                    'max_displacement_mm': None,
+                                    'max_strain': None,
+                                    'status': 'generation_failed',
+                                }
+                                writer.writerow(row)
+                                csvfile.flush()  # Write immediately
+                                print(f"  → Written to CSV: generation_failed")
+                                continue
 
-                    # Use the actual path that was created
-                    stl_path = actual_stl_path
+                            # Use the actual path that was created
+                            stl_path = actual_stl_path
 
-                    # Run simulation using mazers_model_active
-                    results = run_simulation(stl_path)
+                            # Run simulation using mazers_model_active
+                            results = run_simulation(stl_path)
 
-                    if results is None:
-                        print(f"⚠ Skipping CSV entry due to simulation failure")
-                        # Still record in CSV with error flag
-                        row = {
-                            'tpms_type': tpms_type,
-                            'unit_cell_size_mm': unit_cell_size,
-                            'wall_thickness_mm': wall_thickness,
-                            'porosity_min': porosity_min,
-                            'porosity_max': porosity_max,
-                            'stl_path': str(stl_path) if stl_path.exists() else None,
-                            'compressive_strength_MPa': None,
-                            'max_force_N': None,
-                            'cross_sectional_area_m2': None,
-                            'energy_absorption_J': None,
-                            'max_displacement_mm': None,
-                            'max_strain': None,
-                            'status': 'simulation_failed',
-                        }
-                        writer.writerow(row)
-                        csvfile.flush()  # Write immediately
-                        print(f"  → Written to CSV: simulation_failed")
-                        continue
+                            if results is None:
+                                print(f"⚠ Skipping CSV entry due to simulation failure")
+                                # Still record in CSV with error flag
+                                row = {
+                                    'tpms_type': tpms_type,
+                                    'unit_cell_size_mm': unit_cell_size,
+                                    'wall_thickness_mm': wall_thickness,
+                                    'porosity_min': porosity_min,
+                                    'porosity_max': porosity_max,
+                                    'func_degree': func_degree,
+                                    'stl_path': str(stl_path) if stl_path.exists() else None,
+                                    'compressive_strength_MPa': None,
+                                    'max_force_N': None,
+                                    'cross_sectional_area_m2': None,
+                                    'energy_absorption_J': None,
+                                    'max_displacement_mm': None,
+                                    'max_strain': None,
+                                    'status': 'simulation_failed',
+                                }
+                                writer.writerow(row)
+                                csvfile.flush()  # Write immediately
+                                print(f"  → Written to CSV: simulation_failed")
+                                continue
 
-                    # Extract summary results
-                    summary = extract_results_summary(results)
+                            # Extract summary results
+                            summary = extract_results_summary(results)
 
-                    # Add input parameters
-                    row = {
-                        'tpms_type': tpms_type,
-                        'unit_cell_size_mm': unit_cell_size,
-                        'wall_thickness_mm': wall_thickness,
-                        'porosity_min': porosity_min,
-                        'porosity_max': porosity_max,
-                        'stl_path': str(stl_path),  # STL file path
-                        **summary,
-                        'status': 'success',
-                    }
+                            # Add input parameters
+                            row = {
+                                'tpms_type': tpms_type,
+                                'unit_cell_size_mm': unit_cell_size,
+                                'wall_thickness_mm': wall_thickness,
+                                'porosity_min': porosity_min,
+                                'porosity_max': porosity_max,
+                                'func_degree': func_degree,
+                                'stl_path': str(stl_path),  # STL file path
+                                **summary,
+                                'status': 'success',
+                            }
 
-                    # Write to CSV immediately
-                    writer.writerow(row)
-                    csvfile.flush()  # Ensure data is written to disk
+                            # Write to CSV immediately
+                            writer.writerow(row)
+                            csvfile.flush()  # Ensure data is written to disk
 
-                    successful_count += 1
+                            successful_count += 1
 
-                    # Print summary
-                    print(f"Results: Compressive strength = {summary['compressive_strength_MPa']:.2f} MPa")
-                    print(f"  → Written to CSV: success ({successful_count}/{MAX_COMBINATIONS if MAX_COMBINATIONS else 'all'})")
+                            # Print summary
+                            print(f"Results: Compressive strength = {summary['compressive_strength_MPa']:.2f} MPa")
+                            print(f"  → Written to CSV: success ({successful_count}/{MAX_COMBINATIONS if MAX_COMBINATIONS else 'all'})")
 
-                    # Clean up STL file to save space (optional - comment out if you want to keep them)
-                    # stl_path.unlink()
+                            # Clean up STL file to save space (optional - comment out if you want to keep them)
+                            # stl_path.unlink()
 
     # Close CSV file
     csvfile.close()
