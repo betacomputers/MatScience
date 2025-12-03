@@ -139,21 +139,20 @@ class GyroidParameters:
     tpms_type: str = 'gyroid'  # TPMS structure type
 
 
-# Default parameters reproduced from the experimental setup in Section 2.1
-# of the referenced paper. These values produce a 5×5×6 unit cell structure
-# (15×15×18 mm) with a linear porosity gradient from 55% (top) to 30% (bottom).
-# The bounding box ensures the structure is enclosed and watertight.
+# Default parameters for 3x3x3 configuration with 10mm × 10mm × 10mm cells.
+# Each cell: 10mm × 10mm × 10mm = 1000 mm³
+# Total size: 3 × 10mm = 30mm × 30mm × 30mm
 DEFAULT_PARAMS = GyroidParameters(
-    numx=5,                    # 5 unit cells in x-direction
-    numy=5,                    # 5 unit cells in y-direction
-    numz=6,                    # 6 unit cells in z-direction (build direction)
-    unit_cell_size=3.0,        # 3.0 mm per unit cell → 15×15×18 mm total domain
-    nsteps=45,                 # 45 voxels per unit cell → 225×225×270 voxel grid
+    numx=3,                    # 3 unit cells in x-direction
+    numy=3,                    # 3 unit cells in y-direction
+    numz=3,                    # 3 unit cells in z-direction (build direction)
+    unit_cell_size=10.0,       # 10.0 mm per unit cell → 30×30×30 mm total domain
+    nsteps=50,                 # 50 voxels per unit cell → 150×150×150 voxel grid
     porosity_min=0.30,         # 30% porosity at bottom (z=0)
     porosity_max=0.55,         # 55% porosity at top (z=Lz)
     grad=1,                    # Enable linear porosity gradient
     func_degree=1,             # Linear gradient (degree 1 polynomial)
-    delta=0.2,                # 20 porosity tolerance per layer
+    delta=0.02,                # 2% porosity tolerance per layer (standard value)
     smoothness=0.8,            # 0.8 voxel Gaussian smoothing for artifact reduction
     marching_step=1,           # Full resolution marching cubes (step_size=1)
     wall_thickness=0.5,        # 0.5 mm bounding box walls for enclosure
@@ -284,14 +283,20 @@ def compute_domain_lengths(params: GyroidParameters) -> Tuple[float, float, floa
 
 def generate_coordinate_grid(params: GyroidParameters) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Create a periodic voxel grid covering the design domain."""
-    lx, ly, lz = compute_domain_lengths(params)
     nx = params.numx * params.nsteps
     ny = params.numy * params.nsteps
     nz = params.numz * params.nsteps
 
-    x = np.linspace(0.0, lx, nx, endpoint=False)
-    y = np.linspace(0.0, ly, ny, endpoint=False)
-    z = np.linspace(0.0, lz, nz, endpoint=False)
+    # Exact spacing ensures perfect periodicity
+    dx = params.unit_cell_size / params.nsteps
+    dy = params.unit_cell_size / params.nsteps
+    dz = params.unit_cell_size / params.nsteps
+    
+    # Generate grid with exact arithmetic
+    x = np.array([i * dx for i in range(nx)])
+    y = np.array([i * dy for i in range(ny)])
+    z = np.array([i * dz for i in range(nz)])
+    
     return np.meshgrid(x, y, z, indexing="ij")
 
 
@@ -314,80 +319,88 @@ def tpms_field(params: GyroidParameters, grid: Tuple[np.ndarray, np.ndarray, np.
         Normalized TPMS field values in [-1, 1]
     """
     x, y, z = grid
-    lx, ly, lz = compute_domain_lengths(params)
-
-    kx = 2.0 * np.pi / lx
-    ky = 2.0 * np.pi / ly
-    kz = 2.0 * np.pi / lz
+    # Use unit_cell_size for periodicity to ensure proper repetition
+    # Each unit cell should repeat, not the entire domain
+    kx = 2.0 * np.pi / params.unit_cell_size
+    ky = 2.0 * np.pi / params.unit_cell_size
+    kz = 2.0 * np.pi / params.unit_cell_size
+    
+    # Apply modulo to ALL coordinates for perfect periodicity
+    # This ensures the field repeats exactly at cell boundaries
+    # Note: This means porosity gradient will also repeat per cell
+    x_periodic = x % params.unit_cell_size
+    y_periodic = y % params.unit_cell_size
+    z_periodic = z % params.unit_cell_size
 
     # Get TPMS type (case-insensitive, default to gyroid)
     tpms_type = params.tpms_type.lower() if hasattr(params, 'tpms_type') else 'gyroid'
     
     if tpms_type == 'gyroid':
-        # Schoen gyroid equation
+        # Schoen gyroid equation - use periodic coordinates for perfect tiling
         field = (
-            np.sin(kx * x) * np.cos(ky * y)
-            + np.sin(ky * y) * np.cos(kz * z)
-            + np.sin(kz * z) * np.cos(kx * x)
+            np.sin(kx * x_periodic) * np.cos(ky * y_periodic)
+            + np.sin(ky * y_periodic) * np.cos(kz * z_periodic)
+            + np.sin(kz * z_periodic) * np.cos(kx * x_periodic)
         ) / 3.0
         
     elif tpms_type == 'schwarz':
-        # Schwarz P-surface (Primitive)
+        # Schwarz P-surface (Primitive) - use periodic coordinates
         field = (
-            np.cos(kx * x) + np.cos(ky * y) + np.cos(kz * z)
+            np.cos(kx * x_periodic) + np.cos(ky * y_periodic) + np.cos(kz * z_periodic)
         ) / 3.0
         
     elif tpms_type == 'diamond':
-        # Schwarz D-surface (Diamond)
+        # Schwarz D-surface (Diamond) - use periodic coordinates
         field = (
-            np.sin(kx * x) * np.sin(ky * y) * np.sin(kz * z)
-            + np.sin(kx * x) * np.cos(ky * y) * np.cos(kz * z)
-            + np.cos(kx * x) * np.sin(ky * y) * np.cos(kz * z)
-            + np.cos(kx * x) * np.cos(ky * y) * np.sin(kz * z)
+            np.sin(kx * x_periodic) * np.sin(ky * y_periodic) * np.sin(kz * z_periodic)
+            + np.sin(kx * x_periodic) * np.cos(ky * y_periodic) * np.cos(kz * z_periodic)
+            + np.cos(kx * x_periodic) * np.sin(ky * y_periodic) * np.cos(kz * z_periodic)
+            + np.cos(kx * x_periodic) * np.cos(ky * y_periodic) * np.sin(kz * z_periodic)
         ) / 4.0
         
     elif tpms_type == 'lidinoid':
-        # Lidinoid surface
+        # Lidinoid surface - use periodic coordinates
         field = (
-            np.sin(2 * kx * x) * np.cos(ky * y) * np.sin(kz * z)
-            + np.sin(kx * x) * np.sin(2 * ky * y) * np.cos(kz * z)
-            + np.cos(kx * x) * np.sin(ky * y) * np.sin(2 * kz * z)
-            - np.cos(2 * kx * x) * np.cos(2 * ky * y)
-            - np.cos(2 * ky * y) * np.cos(2 * kz * z)
-            - np.cos(2 * kz * z) * np.cos(2 * kx * x)
+            np.sin(2 * kx * x_periodic) * np.cos(ky * y_periodic) * np.sin(kz * z_periodic)
+            + np.sin(kx * x_periodic) * np.sin(2 * ky * y_periodic) * np.cos(kz * z_periodic)
+            + np.cos(kx * x_periodic) * np.sin(ky * y_periodic) * np.sin(2 * kz * z_periodic)
+            - np.cos(2 * kx * x_periodic) * np.cos(2 * ky * y_periodic)
+            - np.cos(2 * ky * y_periodic) * np.cos(2 * kz * z_periodic)
+            - np.cos(2 * kz * z_periodic) * np.cos(2 * kx * x_periodic)
             + 0.3
         ) / 6.0
         
     elif tpms_type == 'split-p':
-        # Split-P surface
+        # Split-P surface - use periodic coordinates
         field = (
             1.1 * (
-                np.sin(2 * kx * x) * np.cos(ky * y) * np.sin(kz * z)
-                + np.sin(kx * x) * np.sin(2 * ky * y) * np.cos(kz * z)
-                + np.cos(kx * x) * np.sin(ky * y) * np.sin(2 * kz * z)
+                np.sin(2 * kx * x_periodic) * np.cos(ky * y_periodic) * np.sin(kz * z_periodic)
+                + np.sin(kx * x_periodic) * np.sin(2 * ky * y_periodic) * np.cos(kz * z_periodic)
+                + np.cos(kx * x_periodic) * np.sin(ky * y_periodic) * np.sin(2 * kz * z_periodic)
             )
             - 0.2 * (
-                np.cos(2 * kx * x) * np.cos(2 * ky * y)
-                + np.cos(2 * ky * y) * np.cos(2 * kz * z)
-                + np.cos(2 * kz * z) * np.cos(2 * kx * x)
+                np.cos(2 * kx * x_periodic) * np.cos(2 * ky * y_periodic)
+                + np.cos(2 * ky * y_periodic) * np.cos(2 * kz * z_periodic)
+                + np.cos(2 * kz * z_periodic) * np.cos(2 * kx * x_periodic)
             )
             - 0.4 * (
-                np.cos(2 * kx * x) + np.cos(2 * ky * y) + np.cos(2 * kz * z)
+                np.cos(2 * kx * x_periodic) + np.cos(2 * ky * y_periodic) + np.cos(2 * kz * z_periodic)
             )
         ) / 5.0
         
     else:
-        # Default to gyroid if unknown type
+        # Default to gyroid if unknown type - use periodic coordinates
         print(f"Warning: Unknown TPMS type '{tpms_type}', defaulting to 'gyroid'")
         field = (
-            np.sin(kx * x) * np.cos(ky * y)
-            + np.sin(ky * y) * np.cos(kz * z)
-            + np.sin(kz * z) * np.cos(kx * x)
+            np.sin(kx * x_periodic) * np.cos(ky * y_periodic)
+            + np.sin(ky * y_periodic) * np.cos(kz * z_periodic)
+            + np.sin(kz * z_periodic) * np.cos(kx * x_periodic)
         ) / 3.0
 
     # Apply Gaussian smoothing if requested
+    # Use mode='wrap' for periodic boundary conditions to preserve periodicity
     if params.smoothness > 0:
-        field = ndimage.gaussian_filter(field, sigma=params.smoothness)
+        field = ndimage.gaussian_filter(field, sigma=params.smoothness, mode='wrap')
         max_abs = np.max(np.abs(field))
         if max_abs > 0:
             field = field / max_abs
@@ -446,30 +459,31 @@ def solve_layer_threshold(layer_field: np.ndarray, solid_target: float, delta: f
 
 
 def add_bounding_box(volume: np.ndarray, spacing: Tuple[float, float, float], wall_thickness: float) -> np.ndarray:
-    """Add solid bounding box walls to enclose the gyroid structure."""
+    """Add solid bounding box walls to enclose the gyroid structure.
+    
+    Walls are added only at the outer boundaries, preserving internal periodicity.
+    The walls should align with the grid spacing to avoid breaking tiling.
+    """
     nx, ny, nz = volume.shape
     dx, dy, dz = spacing
     
-    # Calculate wall thickness in voxels for each direction
-    wall_x = max(1, int(np.ceil(wall_thickness / dx)))
-    wall_y = max(1, int(np.ceil(wall_thickness / dy)))
-    wall_z = max(1, int(np.ceil(wall_thickness / dz)))
+    # Calculate wall thickness in voxels - use exact division to ensure alignment
+    # Round to nearest integer to avoid misalignment issues
+    wall_x = max(1, int(round(wall_thickness / dx)))
+    wall_y = max(1, int(round(wall_thickness / dy)))
+    wall_z = max(1, int(round(wall_thickness / dz)))
     
     # Create a copy to avoid modifying the original
     enclosed_volume = volume.copy()
     
-    # Add walls on all 6 faces
-    # Bottom and top faces (z-direction)
-    enclosed_volume[:, :, :wall_z] = True
-    enclosed_volume[:, :, -wall_z:] = True
-    
-    # Front and back faces (y-direction)
-    enclosed_volume[:, :wall_y, :] = True
-    enclosed_volume[:, -wall_y:, :] = True
-    
-    # Left and right faces (x-direction)
-    enclosed_volume[:wall_x, :, :] = True
-    enclosed_volume[-wall_x:, :, :] = True
+    # Add walls on all 6 faces - only at the very edges
+    # This preserves the internal periodic structure
+    enclosed_volume[:, :, :wall_z] = True      # Bottom (z=0)
+    enclosed_volume[:, :, -wall_z:] = True     # Top (z=max)
+    enclosed_volume[:, :wall_y, :] = True       # Front (y=0)
+    enclosed_volume[:, -wall_y:, :] = True      # Back (y=max)
+    enclosed_volume[:wall_x, :, :] = True       # Left (x=0)
+    enclosed_volume[-wall_x:, :, :] = True      # Right (x=max)
     
     return enclosed_volume
 
@@ -503,7 +517,9 @@ def generate_volume(params: GyroidParameters) -> Tuple[np.ndarray, Tuple[float, 
     spacing = (lx / nx, ly / ny, lz / nz)
     
     # Add bounding box walls to enclose the structure
-    volume = add_bounding_box(volume, spacing, params.wall_thickness)
+    # Only add if wall_thickness > 0 to avoid interfering with periodicity
+    if params.wall_thickness > 0:
+        volume = add_bounding_box(volume, spacing, params.wall_thickness)
 
     metadata: Dict[str, np.ndarray] = {
         "porosity_targets": porosity_targets,
@@ -550,7 +566,6 @@ def visualise(
     spacing: Tuple[float, float, float],
     metadata: Dict[str, np.ndarray],
 ):
-    """Open a Matplotlib window with 3D preview, side projection, and cut view."""
     lx, ly, lz = metadata["lengths"]
 
     fig = plt.figure(figsize=(14, 8))

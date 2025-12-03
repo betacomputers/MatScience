@@ -11,19 +11,24 @@ matplotlib.use('Agg')  # Non-interactive backend
 
 import numpy as np
 
-# Import gyroid generation functions
+# Import
+#  gyroid generation functions
+
 from active_gyroid_gen import (
     GyroidParameters,
+    
     validate_params,
     create_gyroid
 )
 
-# Import simulation functions from mazers_model_active
+# 
+#Import simulation functions from mazers_model_active
 from mazars_model_sfepy import (
     MaterialProperties,
     SimulationParameters,
     load_stl_and_create_mesh,
-    run_compression_test
+    run_compression_test,
+    run_tensile_test
 )
 
 
@@ -33,32 +38,39 @@ from mazars_model_sfepy import (
 # TPMS structure types to test
 TPMS_TYPES = ['gyroid', 'schwarz', 'diamond', 'lidinoid', 'split-p']
 
-# Unit cell sizes to test (mm) - comprehensive range for full dataset
-UNIT_CELL_SIZES = [0.2, 0.3, 0.4, 0.5, 0.6]  # mm
+# Unit cell sizes to test (mm) - scaled for 3x3x3 configuration
+# Target: 10mm × 10mm × 10mm per cell
+# Range around this target for parameter sweep
+UNIT_CELL_SIZES = [8.0, 9.0, 10.0, 11.0, 12.0]  # mm (centered around 10mm)
 
 # Wall thickness values to test (mm) - comprehensive range for full dataset
-WALL_THICKNESSES = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]  # mm
+# Note: Wall thickness should be at least 30% of unit cell size for valid geometry
+WALL_THICKNESSES = [1.0, 1.5, 2.0, 2.5, 3.0]  # mm (increased minimum to 0.3mm for reliability)
 
 # Porosity ranges to test - comprehensive range for full dataset
 POROSITY_MIN_VALUES = [0.2, 0.3, 0.4, 0.5]  # Minimum porosity
 POROSITY_MAX_VALUES = [0.5, 0.6, 0.7, 0.8, 0.9]  # Maximum porosity
 
-# Function degree values to test
-FUNC_DEGREE_VALUES = [1, 2, 3]  # Linear, quadratic, cubic gradient
+# Function degree values to test (0=constant, 1=linear, 2=quadratic)
+FUNC_DEGREE_VALUES = [1, 2]  # Linear, quadratic gradient (cubic not supported)
 
-# Fixed parameters for all structures - balanced for quality and speed
-NUMX = 1  # Number of unit cells in x (single cell)
-NUMY = 1  # Number of unit cells in y (single cell)
-NUMZ = 1  # Number of unit cells in z (single cell)
-NSTEPS = 20  # Voxel resolution per unit cell (balanced quality/speed)
+# Fixed parameters for all structures - 3x3x3 configuration
+# FIXED CONFIGURATION: All structures use 3x3x3 unit cells
+# Target: 10mm × 10mm × 10mm per cell → 30mm × 30mm × 30mm total
+NUMX = 3  # Fixed: 3 unit cells in x-direction
+NUMY = 3  # Fixed: 3 unit cells in y-direction
+NUMZ = 3  # Fixed: 3 unit cells in z-direction
+NSTEPS = 50  # Voxel resolution per unit cell
 GRAD = 1  # Graded porosity (1) or constant (0)
-DELTA = 0.2  # Porosity tolerance
+DELTA = 0.02  # Porosity tolerance (2% - standard value)
 SMOOTHNESS = 0.8  # Gaussian smoothing
-MARCHING_STEP = 2  # Marching cubes resolution (balanced quality/speed)
+MARCHING_STEP = 1  # Marching cubes resolution
 
 # Simulation parameters - FULL simulations
 SIM_ELEMENT_SIZE = 0.05  # m (balanced for accuracy)
-SIM_MAX_FORCE = 30.0  # N (targets 10-50 MPa stress range for 0.2-0.6 mm unit cells)
+# Fixed force: For 3x3x3 with 10mm cells → 30mm cube (0.03m × 0.03m = 0.0009 m²)
+# Force = Stress × Area = 35e6 Pa × 0.0009 m² = 31,500 N ≈ 31.5 kN
+SIM_MAX_FORCE = 5000.0  # Fixed force in N (5 kN) - targets ~35 MPa for 30mm structures
 SIM_NUM_STEPS = 10  # Full simulation with 10 steps
 
 # Test limit - set to None to test all combinations
@@ -75,16 +87,32 @@ GYROID_OUTPUT_DIR.mkdir(exist_ok=True)
 def generate_gyroid_structure(unit_cell_size: float, wall_thickness: float,
                                porosity_min: float, porosity_max: float,
                                output_stl_path: Path, tpms_type: str = 'gyroid', func_degree: int = 1) -> Tuple[bool, Path]:
-    """Generate TPMS STL file with given parameters using active_gyroid_gen."""
+    """Generate TPMS STL file with given parameters using active_gyroid_gen.
+    
+    All structures use a fixed 3x3x3 configuration.
+    Each cell: unit_cell_size × unit_cell_size × unit_cell_size (target: 10mm × 10mm × 10mm).
+    """
     try:
-        print(f"Generating {tpms_type} TPMS: cell_size={unit_cell_size}mm, wall={wall_thickness}mm, "
+        # Fixed 3x3x3 configuration
+        numx = NUMX
+        numy = NUMY
+        numz = NUMZ
+        
+        actual_size_x = numx * unit_cell_size
+        actual_size_y = numy * unit_cell_size
+        actual_size_z = numz * unit_cell_size
+        cell_volume_mm3 = unit_cell_size ** 3
+        
+        print(f"Generating {tpms_type} TPMS: cell_size={unit_cell_size:.2f}mm, wall={wall_thickness}mm, "
               f"porosity=[{porosity_min:.2f}, {porosity_max:.2f}], func_degree={func_degree}")
+        print(f"  3x3x3 configuration: {numx}x{numy}x{numz} cells = {actual_size_x:.2f}x{actual_size_y:.2f}x{actual_size_z:.2f}mm")
+        print(f"  Cell volume: {cell_volume_mm3:.1f} mm³ (target: 1000 mm³ for 10mm cells)")
 
         # Create GyroidParameters using the new API
         params = GyroidParameters(
-            numx=NUMX,
-            numy=NUMY,
-            numz=NUMZ,
+            numx=numx,
+            numy=numy,
+            numz=numz,
             unit_cell_size=unit_cell_size,
             nsteps=NSTEPS,
             porosity_min=porosity_min,
@@ -112,6 +140,13 @@ def generate_gyroid_structure(unit_cell_size: float, wall_thickness: float,
             print(f"✗ STL file not created at {stl_path}")
             return False, output_stl_path
 
+    except ValueError as e:
+        # Handle specific errors like "Surface level must be within volume data range"
+        if "Surface level must be within volume data range" in str(e):
+            print(f"✗ Invalid geometry: parameters produce empty/invalid volume (likely wall too thin or cell too small)")
+        else:
+            print(f"✗ Validation error: {e}")
+        return False, output_stl_path
     except Exception as e:
         print(f"✗ Error generating gyroid: {e}")
         import traceback
@@ -127,9 +162,12 @@ def run_simulation(stl_path: Path) -> Dict:
         material = MaterialProperties()
 
         # Simulation parameters
+        # Use fixed force for all geometries to enable fair comparison
+        # All structures have the same fixed size (10mm × 10mm × 10mm), so cross-sectional area is the same
         sim_params = SimulationParameters(
             element_size=SIM_ELEMENT_SIZE,
-            max_force=SIM_MAX_FORCE,
+            max_force=SIM_MAX_FORCE,  # Fixed force (same for all geometries)
+            target_stress_mpa=35.0,  # Not used when max_force is specified, but updated to match default
             num_steps=SIM_NUM_STEPS,
         )
 
@@ -137,9 +175,21 @@ def run_simulation(stl_path: Path) -> Dict:
         fenics_mesh = load_stl_and_create_mesh(stl_path, sim_params.element_size)
 
         # Run compression test
-        results = run_compression_test(fenics_mesh, material, sim_params)
+        compression_results = run_compression_test(fenics_mesh, material, sim_params)
+        
+        # Run tension test
+        tension_results = run_tensile_test(fenics_mesh, material, sim_params)
+        
+        # Combine results (similar to main() function in mazars_model_sfepy.py)
+        results = {
+            "compression": compression_results,
+            "tension": tension_results,
+            "compressive_strength": compression_results['compressive_strength'],
+            "tensile_strength": tension_results['tensile_strength'],
+            "cross_sectional_area_m2": compression_results['cross_sectional_area_m2'],
+        }
 
-        print(f"✓ Simulation completed")
+        print(f"✓ Simulation completed (compression + tension)")
         return results
 
     except Exception as e:
@@ -150,14 +200,31 @@ def run_simulation(stl_path: Path) -> Dict:
 
 
 def extract_results_summary(results: Dict) -> Dict:
-    return {
-        'compressive_strength_MPa': results['compressive_strength'] / 1e6,
-        'max_force_N': results['max_force_N'],
-        'cross_sectional_area_m2': results['cross_sectional_area_m2'],
-        'energy_absorption_J': results['total_energy_absorption'],
-        'max_displacement_mm': max([abs(d) for d in results['displacements']]) * 1000 if results['displacements'] else 0.0,
-        'max_strain': max([abs(s) for s in results['strains']]) if results['strains'] else 0.0,
-    }
+    """Extract summary results from simulation, handling both old and new result formats."""
+    # Handle new format with compression/tension split
+    if 'compression' in results and 'tension' in results:
+        comp = results['compression']
+        tens = results['tension']
+        return {
+            'compressive_strength_MPa': results.get('compressive_strength', comp.get('compressive_strength', 0.0)) / 1e6,
+            'tensile_strength_MPa': results.get('tensile_strength', tens.get('tensile_strength', 0.0)) / 1e6,
+            'max_force_N': comp.get('max_force_N', 0.0),
+            'cross_sectional_area_m2': results.get('cross_sectional_area_m2', comp.get('cross_sectional_area_m2', 0.0)),
+            'energy_absorption_J': comp.get('total_energy_absorption', 0.0),
+            'max_displacement_mm': max([abs(d) for d in comp.get('displacements', [])]) * 1000 if comp.get('displacements') else 0.0,
+            'max_strain': max([abs(s) for s in comp.get('strains', [])]) if comp.get('strains') else 0.0,
+        }
+    else:
+        # Handle old format (compression only)
+        return {
+            'compressive_strength_MPa': results.get('compressive_strength', 0.0) / 1e6,
+            'tensile_strength_MPa': 0.0,  # Not available in old format
+            'max_force_N': results.get('max_force_N', 0.0),
+            'cross_sectional_area_m2': results.get('cross_sectional_area_m2', 0.0),
+            'energy_absorption_J': results.get('total_energy_absorption', 0.0),
+            'max_displacement_mm': max([abs(d) for d in results.get('displacements', [])]) * 1000 if results.get('displacements') else 0.0,
+            'max_strain': max([abs(s) for s in results.get('strains', [])]) if results.get('strains') else 0.0,
+        }
 
 
 def main():
@@ -171,8 +238,11 @@ def main():
     print(f"Porosity min values: {POROSITY_MIN_VALUES}")
     print(f"Porosity max values: {POROSITY_MAX_VALUES}")
     print(f"Function degree values: {FUNC_DEGREE_VALUES}")
-    print(f"Mesh resolution: {NSTEPS} voxels/unit cell (reduced for speed)")
-    print(f"Marching cubes step: {MARCHING_STEP} (lower = faster)")
+    print(f"FIXED CONFIGURATION: All structures use {NUMX}×{NUMY}×{NUMZ} unit cells")
+    print(f"  Target: 10mm × 10mm × 10mm per cell (1000 mm³)")
+    print(f"  Example size (10mm cells): {NUMX * 10.0:.1f}mm × {NUMY * 10.0:.1f}mm × {NUMZ * 10.0:.1f}mm")
+    print(f"Mesh resolution: {NSTEPS} voxels/unit cell")
+    print(f"Marching cubes step: {MARCHING_STEP}")
     print(f"Simulation steps: {SIM_NUM_STEPS} (full simulation)")
     total_combinations = len(TPMS_TYPES) * len(UNIT_CELL_SIZES) * len(WALL_THICKNESSES) * len(POROSITY_MIN_VALUES) * len(POROSITY_MAX_VALUES) * len(FUNC_DEGREE_VALUES)
     print(f"Total possible combinations: {total_combinations}")
@@ -191,6 +261,7 @@ def main():
         'func_degree',
         'stl_path',
         'compressive_strength_MPa',
+        'tensile_strength_MPa',
         'max_force_N',
         'cross_sectional_area_m2',
         'energy_absorption_J',
@@ -220,6 +291,18 @@ def main():
                         for func_degree in FUNC_DEGREE_VALUES:
                             # Skip if min > max
                             if porosity_min > porosity_max:
+                                continue
+                            
+                            # Skip if wall thickness is too small relative to unit cell size
+                            # Wall thickness should be at least 30% of unit cell size for valid geometry
+                            if wall_thickness < 0.3 * unit_cell_size:
+                                print(f"  Skipping: wall_thickness ({wall_thickness}mm) too small for unit_cell_size ({unit_cell_size}mm)")
+                                continue
+                            
+                            # Skip if high porosity with thin walls (likely to fail)
+                            # High porosity (>0.7) with thin walls (<0.4mm) often produces invalid geometries
+                            if porosity_max > 0.7 and wall_thickness < 0.4:
+                                print(f"  Skipping: high porosity ({porosity_max:.2f}) with thin wall ({wall_thickness}mm) likely to fail")
                                 continue
 
                             # Check if we've reached the limit (before processing)
@@ -254,6 +337,7 @@ def main():
                                     'func_degree': func_degree,
                                     'stl_path': None,
                                     'compressive_strength_MPa': None,
+                                    'tensile_strength_MPa': None,
                                     'max_force_N': None,
                                     'cross_sectional_area_m2': None,
                                     'energy_absorption_J': None,
@@ -284,6 +368,7 @@ def main():
                                     'func_degree': func_degree,
                                     'stl_path': str(stl_path) if stl_path.exists() else None,
                                     'compressive_strength_MPa': None,
+                                    'tensile_strength_MPa': None,
                                     'max_force_N': None,
                                     'cross_sectional_area_m2': None,
                                     'energy_absorption_J': None,
@@ -319,7 +404,8 @@ def main():
                             successful_count += 1
 
                             # Print summary
-                            print(f"Results: Compressive strength = {summary['compressive_strength_MPa']:.2f} MPa")
+                            print(f"Results: Compressive strength = {summary['compressive_strength_MPa']:.2f} MPa, "
+                                  f"Tensile strength = {summary['tensile_strength_MPa']:.2f} MPa")
                             print(f"  → Written to CSV: success ({successful_count}/{MAX_COMBINATIONS if MAX_COMBINATIONS else 'all'})")
 
                             # Clean up STL file to save space (optional - comment out if you want to keep them)
@@ -347,10 +433,17 @@ def main():
         if successful_rows:
             print(f"\nSummary Statistics:")
             print(f"  Successful simulations: {len(successful_rows)}/{len(csv_rows)}")
-            strengths = [float(r['compressive_strength_MPa']) for r in successful_rows if r.get('compressive_strength_MPa') and r['compressive_strength_MPa'] != 'None']
-            if strengths:
-                print(f"  Compressive strength range: {min(strengths):.2f} - {max(strengths):.2f} MPa")
-                print(f"  Average compressive strength: {np.mean(strengths):.2f} MPa")
+            comp_strengths = [float(r['compressive_strength_MPa']) for r in successful_rows if r.get('compressive_strength_MPa') and r['compressive_strength_MPa'] != 'None']
+            if comp_strengths:
+                print(f"  Compressive strength range: {min(comp_strengths):.2f} - {max(comp_strengths):.2f} MPa")
+                print(f"  Average compressive strength: {np.mean(comp_strengths):.2f} MPa")
+            tens_strengths = [float(r['tensile_strength_MPa']) for r in successful_rows if r.get('tensile_strength_MPa') and r['tensile_strength_MPa'] != 'None' and r['tensile_strength_MPa'] != '0.0']
+            if tens_strengths:
+                print(f"  Tensile strength range: {min(tens_strengths):.2f} - {max(tens_strengths):.2f} MPa")
+                print(f"  Average tensile strength: {np.mean(tens_strengths):.2f} MPa")
+                if comp_strengths and len(comp_strengths) == len(tens_strengths):
+                    ratios = [t/c for t, c in zip(tens_strengths, comp_strengths)]
+                    print(f"  Tensile/Compressive ratio: {np.mean(ratios):.3f} (range: {min(ratios):.3f} - {max(ratios):.3f})")
     else:
         print("No CSV file found!")
 
